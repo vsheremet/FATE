@@ -11,10 +11,11 @@ Drifter Tracking using velocity field from FVCOM GOM3 model
 2013-05-03 ver 9 added check if point is inside polygon in VelInterp_lonlat
 2013-05-06 ver10 VelInterp_lonlat vel=0 if point is outside mesh
                  drifter array init position at nodes of GOM3R grid
-                 NCPU= 1,ND=644 timing [s] per step:  3.5996 0.0008
+                 NCPU= 1,ND=644   timing [s] per step:  3.5996 0.000
+                 NCPU= 1,ND=10276 timing [s] per step:  53.8676 0.0048
 2013-05-07 ver11 with multiprocessing 
-                 NCPU=16,ND=644   timing [s] per step:  0.608 1.0416
-                 NCPU=16,ND=10276 timing [s] per step:  1.182 1.188
+                 NCPU=16,ND=644   timing [s] per step:  0.608 1.0416   speedup 5.92
+                 NCPU=16,ND=10276 timing [s] per step:  1.182 1.188    speedup 45.57
 
 @author: Vitalii Sheremet, FATE Project, 2012-2013
 """
@@ -664,13 +665,8 @@ for kt in range(NT-1):
     lolas1=np.array(lolas1)
     lont[kt+1,:]=lolas1[:,0];latt[kt+1,:]=lolas1[:,1]
      
-
 toc=os.times()
 print 'timing [s] per step: ', (toc[0]-tic[0])/NT,(toc[1]-tic[1])/NT
-
-
-
-#uv,vv=InterpF2V(u,v,Grid)
 
 plt.figure()
 
@@ -678,7 +674,7 @@ plt.plot(lon,lat,'g.',lonc,latc,'c+');
 for kd in range(ND):
     plt.plot(lont[0,kd],latt[0,kd],'bo',lont[:,kd],latt[:,kd],'r-',lont[-1,kd],latt[-1,kd],'ro')
 
-plt.plot(llondx,llatdx,'yo');
+#plt.plot(llondx,llatdx,'yo');
 
 
 """
@@ -694,4 +690,3 @@ kvf=Grid['kvf'][:,kfv][i]
 plt.plot(Grid['lon'][kvf],Grid['lat'][kvf],'r-')  
 """
 plt.show()    
-
