@@ -7,7 +7,36 @@ Drifter Tracking using velocity field from FVCOM GOM3 model
 
 2013-05-01 ver7 curvilinear coordinates lon,lat
            RungeKutta4_lonlat, VelInterp_lonlat
+2013-05-02 ver 8 multiple drifters 
+2013-05-03 ver 9 added check if point is inside polygon in VelInterp_lonlat
+2013-05-06 ver10 VelInterp_lonlat vel=0 if point is outside mesh
+                 drifter array init position at nodes of GOM3R grid
+                 NCPU= 1,ND=644   timing [s] per step:  3.5996 0.000
+                 NCPU= 1,ND=10276 timing [s] per step:  53.8676 0.0048
+                                  timing [s] per step:  73.2635294118 0.00176470588235
+2013-05-07 ver11 with multiprocessing 
+                 NCPU=16,ND=644   timing [s] per step:  0.608 1.0416   speedup 5.92
+                 NCPU=16,ND=10276 timing [s] per step:  1.182 1.188    speedup 45.57
+                                             per step:  1.272 1.671
 
+2013-05-08 ver12 RungeKutta4_lonlat_opt imized with numexpr                                             
+                 timing [s] per step:  1.2592 1.142 numexpr makes timing worse                                            
+                 timing [s] per step:  1.2084 1.438 nonoptimized
+                 timing [s] per step:  1.1976 1.478 tau2,tau6 without numexpr
+                 list comprehension does not affect speed
+                                  
+2013-05-09 ver13 inconvexpolygon launch only drifters inside a given polygon
+NCPU=16 ND=7085 62days
+timing [s] per step:  1.11063801209 1.30794492948 
+2h17m
+
+NCPU=16 ND=1170 62days
+timing [s] per step:  0.795285426461 1.37378777703
+2013-05-10 12:26:04.821766 2013-05-10 13:38:30.361342
+1:12:25.539576
+
+2013-05-13 ver 14 RungeKutta4: fixed weights in virtual time steps: 1. 0.5 0.5 1.
+                 
 @author: Vitalii Sheremet, FATE Project, 2012-2013
 """
 
@@ -15,7 +44,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 from datetime import *
-
+import multiprocessing as mp
 
 def RungeKutta4_lonlat(lon,lat,Grid,u,v,tau):
     """
@@ -36,15 +65,35 @@ to track particles one time step
 
 Vitalii Sheremet, FATE Project, 2012-2013
     """
-        
+    """    
     lon1=lon*1.;          lat1=lat*1.;        urc1,v1=VelInterp_lonlat(lon1,lat1,Grid,u,v);  
     lon2=lon+0.5*tau*urc1;lat2=lat+0.5*tau*v1;urc2,v2=VelInterp_lonlat(lon2,lat2,Grid,u,v);
     lon3=lon+0.5*tau*urc2;lat3=lat+0.5*tau*v2;urc3,v3=VelInterp_lonlat(lon3,lat3,Grid,u,v);
-    lon4=lon+0.5*tau*urc3;lat4=lat+0.5*tau*v3;urc4,v4=VelInterp_lonlat(lon4,lat4,Grid,u,v);
+    lon4=lon+    tau*urc3;lat4=lat+    tau*v3;urc4,v4=VelInterp_lonlat(lon4,lat4,Grid,u,v);
     lon=lon+tau/6.*(urc1+2.*urc2+2.*urc3+urc4);
     lat=lat+tau/6.*(v1+2.*v2+2.*v3+v4);
-       
+    """
+        
+    urc1,v1=VelInterp_lonlat(lon,lat,Grid,u,v);
+    tau2 = tau*0.5
+    lon2=lon+tau2*urc1;lat2=lat+tau2*v1;urc2,v2=VelInterp_lonlat(lon2,lat2,Grid,u,v);
+    lon3=lon+tau2*urc2;lat3=lat+tau2*v2;urc3,v3=VelInterp_lonlat(lon3,lat3,Grid,u,v);
+    lon4=lon+tau *urc3;lat4=lat+tau *v3;urc4,v4=VelInterp_lonlat(lon4,lat4,Grid,u,v);
+    tau6 = tau/6.0
+    lon=lon+tau6*(urc1+2.*urc2+2.*urc3+urc4);
+    lat=lat+tau6*(v1+2.*v2+2.*v3+v4);
     return lon,lat
+    
+def step(args):
+    lo=args['lo'];la=args['la'];Grid=args['Grid'];u=args['u'];v=args['v'];tau=args['tau']
+    lo1,la1=RungeKutta4_lonlat(lo,la,Grid,u,v,tau)
+    return [lo1,la1]
+    
+def gen_args(los,las,Grid,u,v,tau):
+    for k in range(len(los)):
+        lo=los[k];la=las[k]
+        yield {'lo':lo,'la':la,'Grid':Grid,'u':u,'v':v,'tau':tau}
+
     
 def nearxy(x,y,xp,yp):
     """
@@ -211,15 +260,23 @@ Vitalii Sheremet, FATE Project
     
     w=xv*0.
     j2=np.arange(N-2)
+    
     for j in range(N):
 # (j2+j+1)%N - list of triangles except the two adjacent to the edge pj
 # For hexagon N=6 j2=0,1,2,3; if j=3  (j2+j+1)%N=4,5,0,1
         w[j]=Ajab[j]*Aj[(j2+j+1)%N].prod()
+# timing [s] per step:  1.1976 1.478
+# timing [s] per step:  1.2048 1.4508 
+        
+    
+#    w=np.array([Ajab[j]*Aj[(j2+j+1)%N].prod() for j in range(N)])
+# timing [s] per step:  1.2192 1.4572
+# list comprehension does not affect speed
 
 # normalize w so that sum(w)=1       
     w=w/w.sum() 
        
-    return w
+    return w,Aj
 
     
 def Veli(x,y,Grid,u,v):
@@ -313,9 +370,36 @@ Velocity interpolating function
 #    print kfv
 # coordinates of the (dual mesh) polygon vertices: the centers of triangle faces
     lonv=Grid['lonc'][kfv];latv=Grid['latc'][kfv] 
-    w=polygonal_barycentric_coordinates(lonp,latp,lonv,latv)
-# baricentric coordinates are invariant wrt coordinate transformation (xy - lonlat), check!    
-#    print w
+    w,Aj=polygonal_barycentric_coordinates(lonp,latp,lonv,latv)
+# baricentric coordinates are invariant wrt coordinate transformation (xy - lonlat), check! 
+
+# Check whether any Aj are negative, which would mean that a point is outside the polygon.
+# Otherwise, the polygonal interpolation will not be continous.
+# This check is not needed if the triangular mesh and its dual polygonal mesh
+# are Delaunay - Voronoi. 
+
+# normalize subareas by the total area 
+# because the area sign depends on the mesh orientation.    
+    Aj=Aj/Aj.sum()
+    if np.argwhere(Aj<0).flatten().size>0:
+# if point is outside the polygon try neighboring polygons
+#        print kv,kfv,Aj
+        for kv1 in Grid['kvv'][0:Grid['nvv'][kv],kv]:
+            kfv1=Grid['kfv'][0:Grid['nfv'][kv1],kv1]
+            lonv1=Grid['lonc'][kfv1];latv1=Grid['latc'][kfv1] 
+            w1,Aj1=polygonal_barycentric_coordinates(lonp,latp,lonv1,latv1)
+            Aj1=Aj1/Aj1.sum()
+            if np.argwhere(Aj1<0).flatten().size==0:
+                w=w1;kfv=kfv1;kv=kv1;Aj=Aj1
+#                print kv,kfv,Aj
+
+# Now there should be no negative w
+# unless the point is outside the triangular mesh
+    if np.argwhere(w<0).flatten().size>0:
+#        print kv,kfv,w
+        
+# set w=0 -> velocity=0 for points outside 
+        w=w*0.        
 
 # interpolation within polygon, w - normalized weights: w.sum()=1.    
 # use precalculated Lame coefficients for the spherical coordinates
@@ -323,11 +407,96 @@ Velocity interpolating function
 # essentially interpolate u/cos(latitude)
 # this is needed for RungeKutta_lonlat: dlon = u/cos(lat)*tau, dlat = vi*tau
 
+# In this version the resulting interpolated field is continuous, C0.
     cv=Grid['coslatc'][kfv]    
     urci=(u[kfv]/cv*w).sum()
     vi=(v[kfv]*w).sum()
         
-    return urci,vi 
+    return urci,vi
+    
+def ingom3(lonp,latp,Grid):
+    """
+check if point is inside GOM3 mesh
+
+    i=ingom3(lonp,latp,Grid)
+    
+    lonp,latp - arrays of points where the interpolated velocity is desired
+    Grid - parameters of the triangular grid
+
+    i - boolean, True if lonp,latp inside GOM3, False otherwise
+    
+    """
+
+# find the nearest vertex    
+    kv=nearlonlat(Grid['lon'],Grid['lat'],lonp,latp)
+#    print kv
+# list of triangles surrounding the vertex kv    
+    kfv=Grid['kfv'][0:Grid['nfv'][kv],kv]
+#    print kfv
+# coordinates of the (dual mesh) polygon vertices: the centers of triangle faces
+    lonv=Grid['lonc'][kfv];latv=Grid['latc'][kfv] 
+    w,Aj=polygonal_barycentric_coordinates(lonp,latp,lonv,latv)
+# baricentric coordinates are invariant wrt coordinate transformation (xy - lonlat), check! 
+
+# Check whether any Aj are negative, which would mean that a point is outside the polygon.
+# Otherwise, the polygonal interpolation will not be continous.
+# This check is not needed if the triangular mesh and its dual polygonal mesh
+# are Delaunay - Voronoi. 
+
+# normalize subareas by the total area 
+# because the area sign depends on the mesh orientation.    
+    Aj=Aj/Aj.sum()
+    if np.argwhere(Aj<0).flatten().size>0:
+# if point is outside the polygon try neighboring polygons
+#        print kv,kfv,Aj
+        for kv1 in Grid['kvv'][0:Grid['nvv'][kv],kv]:
+            kfv1=Grid['kfv'][0:Grid['nfv'][kv1],kv1]
+            lonv1=Grid['lonc'][kfv1];latv1=Grid['latc'][kfv1] 
+            w1,Aj1=polygonal_barycentric_coordinates(lonp,latp,lonv1,latv1)
+            Aj1=Aj1/Aj1.sum()
+            if np.argwhere(Aj1<0).flatten().size==0:
+                w=w1;kfv=kfv1;kv=kv1;Aj=Aj1
+#                print kv,kfv,Aj
+
+# Now there should be no negative w
+# unless the point is outside the triangular mesh
+    i=(w>=0.).all()
+        
+    return i
+  
+def inconvexpolygon(xp,yp,xv,yv):
+    """
+check if point is inside a convex polygon
+
+    i=inconvexpolygon(xp,yp,xv,yv)
+    
+    xp,yp - arrays of points to be tested
+    xv,yv - vertices of the convex polygon
+
+    i - boolean, True if xp,yp inside the polygon, False otherwise
+    
+    """
+    
+    
+    N=len(xv)   
+    j=np.arange(N)
+    ja=(j+1)%N # next vertex in the sequence 
+#    jb=(j-1)%N # previous vertex in the sequence
+    
+    NP=len(xp)
+    i=np.zeros(NP,dtype=bool)
+    for k in range(NP):
+        # area of triangle p,j,j+1
+        Aj=np.cross(np.array([xv[j]-xp[k],yv[j]-yp[k]]).T,np.array([xv[ja]-xp[k],yv[ja]-yp[k]]).T) 
+    # if a point is inside the convect polygon all these Areas should be positive 
+    # (assuming the area of polygon is positive, counterclockwise contour)
+        Aj /= Aj.sum()
+    # Now there should be no negative Aj
+    # unless the point is outside the triangular mesh
+        i[k]=(Aj>0.).all()
+        
+    return i
+  
     
 def RataDie(yr,mo=1,da=1,hr=0,mi=0,se=0):
     """
@@ -474,26 +643,92 @@ v=np.load('20010101000000_va.npy').flatten()
 
 FN0='/home/vsheremet/FATE/GOM3_DATA/'
 
-lond=np.array([-67.])
-latd=np.array([42.])
+"""
+lond0=np.arange(-69.,-66.,0.25)
+latd0=np.arange(41.,43.,0.25)
 
-t0=RataDie(2001,1,1)
-t1=RataDie(2001,1,30)
-tt=np.arange(t0,t1,1./24.)
+lond0=np.arange(-70.4,-70.1,0.2)
+latd0=np.arange(41.4,41.55,0.2)
+
+#lond0=np.array([-66.])
+#latd0=np.array([ 42.])
+
+llond0,llatd0=np.meshgrid(lond0,latd0)
+llond0=llond0.flatten()
+llatd0=llatd0.flatten()
+ND=llond0.size
+"""
+
+# rectangular grid that completely covers gom3
+# and is aligned with 32x32 front detection subwindows
+gom3r_lon=np.load('gom3r.lon.npy')
+gom3r_lat=np.load('gom3r.lat.npy')
+MS=2
+#subsample every 2nd node
+#gom3r_llon,gom3r_llat=np.meshgrid(gom3r_lon[::2],gom3r_lat[::2])
+gom3r_llon,gom3r_llat=np.meshgrid(gom3r_lon[::MS],gom3r_lat[::MS])
+RSHAPE=gom3r_llon.shape
+# deploy drifters at nodes of GOM3R grid
+llond0=gom3r_llon.flatten()
+llatd0=gom3r_llat.flatten()
+ND=llond0.size
+print 'ND =',ND
+
+LArea='GB150m'
+if LArea=='GOM3':
+#select only points inside GOM3 mesh
+    i=np.zeros(ND,dtype=bool)
+    for k in range(ND):
+        i[k]=ingom3(llond0[k],llatd0[k],Grid)
+    llondx=llond0[np.argwhere(i==False).flatten()]
+    llatdx=llatd0[np.argwhere(i==False).flatten()]
+    llond0=llond0[np.argwhere(i==True).flatten()]
+    llatd0=llatd0[np.argwhere(i==True).flatten()]
+    ND=llond0.size
+    print 'ND =',ND
+
+elif LArea=='GB150m':
+# select only points inside GB150m Area
+    GB150m=np.load('GB150m.npy')
+    i=inconvexpolygon(llond0,llatd0,GB150m[:,0],GB150m[:,1])
+    llond0=llond0[np.argwhere(i).flatten()]
+    llatd0=llatd0[np.argwhere(i).flatten()]
+    ND=llond0.size
+    print 'ND =',ND
+
+
+D='a'
+FVS='u'+D
+
+t0=RataDie(1980,2,5)
+FTS='19800205'
+#t1=RataDie(1980,4,2)
+t1=t0+62
+dtday=1./24.
+tt=np.arange(t0,t1+dtday,dtday)
 NT=len(tt)
 #NT=175
-lont=np.zeros(NT)
-latt=np.zeros(NT)
+lont=np.zeros((NT,ND))
+latt=np.zeros((NT,ND))
 dt=60*60.
 tau=dt/111111. # deg per (velocityunits*dt)
 # dt in seconds
 # vel units m/s
 # in other words v*tau -> deg 
 
+# initial positions
+lont[0,:]=llond0
+latt[0,:]=llatd0
+
+NCPU=1
+NCPU=4
+ 
+tic1=datetime.now()
 tic=os.times()
-for kt in range(NT):
+
+for kt in range(NT-1):
 #    print kt
-#    """
+    
 #time dependent u,v
     tRD=tt[kt]
     tn=np.round(tRD*24.)/24.
@@ -506,28 +741,44 @@ for kt in range(NT):
     TS=YEAR+MO+DA+HR+'0000'
     print TS
     
-    FNU=FN0+'GOM3_'+YEAR+'/'+'u0/'+TS+'_u0.npy'
-    FNV=FN0+'GOM3_'+YEAR+'/'+'v0/'+TS+'_v0.npy'
+    FNU=FN0+'GOM3_'+YEAR+'/'+'u'+D+'/'+TS+'_u'+D+'.npy'
+    FNV=FN0+'GOM3_'+YEAR+'/'+'v'+D+'/'+TS+'_v'+D+'.npy'
     u=np.load(FNU).flatten()
     v=np.load(FNV).flatten()
-#    """    
-    lont[kt],latt[kt]=lond,latd
-#    xd,yd=RungeKutta4_2D(xd,yd,Grid,u,v,dt)
-    lond,latd=RungeKutta4_lonlat(lond,latd,Grid,u,v,tau)
 
-
+    if NCPU==1:    
+        for kd in range(ND):
+# for each drifter make one time step using classic 4th order Runge-Kutta method        
+            lont[kt+1,kd],latt[kt+1,kd]=RungeKutta4_lonlat(lont[kt,kd],latt[kt,kd],Grid,u,v,tau)
+    else:
+        los=lont[kt,:];las=latt[kt,:]
+        p = mp.Pool(processes=NCPU)
+        lolas1=p.map(step,gen_args(los,las,Grid,u,v,tau))
+        p.close()
+        p.join()
+        lolas1=np.array(lolas1)
+        lont[kt+1,:]=lolas1[:,0];latt[kt+1,:]=lolas1[:,1]
+     
 toc=os.times()
 print 'timing [s] per step: ', (toc[0]-tic[0])/NT,(toc[1]-tic[1])/NT
-
-
-
-#uv,vv=InterpF2V(u,v,Grid)
+toc1=datetime.now()
+print tic1,toc1
+print toc1-tic1
 
 plt.figure()
 
-plt.plot(lon,lat,'r.',lonc,latc,'b+');
-plt.plot(lont,latt,'ko-',lont[-1],latt[-1],'mo')
+plt.plot(lon,lat,'g.',lonc,latc,'c+');
+for kd in range(ND):
+    plt.plot(lont[0,kd],latt[0,kd],'bo',lont[:,kd],latt[:,kd],'r-',lont[-1,kd],latt[-1,kd],'ro')
 
+#plt.plot(llondx,llatdx,'yo');
+
+np.save('drifttrack.lont.npy',lont)
+np.save('drifttrack.latt.npy',latt)
+np.save('dtr'+FTS+FVS+'lont.npy',lont)
+np.save('dtr'+FTS+FVS+'latt.npy',latt)
+
+"""
 lonp=lond;latp=latd
 kv=nearlonlat(Grid['lon'],Grid['lat'],lonp,latp)
 plt.plot(Grid['lon'][kv],Grid['lat'][kv],'go')  
@@ -538,5 +789,5 @@ plt.plot(Grid['lonc'][kfv],Grid['latc'][kfv],'gd')
 i=[0,1,2,0]
 kvf=Grid['kvf'][:,kfv][i]
 plt.plot(Grid['lon'][kvf],Grid['lat'][kvf],'r-')  
+"""
 plt.show()    
-
