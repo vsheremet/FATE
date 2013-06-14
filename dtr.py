@@ -94,6 +94,19 @@ timing [s] per step:  70.6055809268 0.00303559435863
 
 2013-05-24 dtr_v15.py RungeKutta4_lonlattime - interpolate vel fields in time
 
+timing [s] per step:  63.8381061115 0.00327065144392
+2013-05-24 12:36:37.531473 2013-05-25 15:05:43.669979
+1 day, 2:29:06.138506
+timing [s] per step:  79.2464607119 0.00389523169913
+2013-05-24 12:37:17.609162 2013-05-25 21:29:41.319480
+1 day, 8:52:23.710318
+
+2013-06-11 dtr_v16.py save temp data along the track (trilinear interpolation)
+
+2013-06-13 dtr_v17.py RungeKutta4_lonlattime for multiple processors
+temperature output disabled (needs to be parallelized)
+           
+           dtr_v18.py get_uv(tRD) put into a function
                  
 @author: Vitalii Sheremet, FATE Project, 2012-2013
 """
@@ -117,7 +130,7 @@ to track particles one time step
     u,v  - E,N velocity field defined on the grid
     ua,va - beginning of time step
     uc,vc - interpolated at the middle of time step
-    ub,vb -end of time step (next time level)
+    ub,vb - end of time step (next time level)
     tau - nondim time step, deg per (velocityunits*dt), in other words, v*tau -> deg
           if dt in sec, v in m/s, then tau=dt/111111.
 
@@ -125,14 +138,6 @@ to track particles one time step
            u,v=VelInterp_lonlat(lon,lat,Grid,u,v)
 
 Vitalii Sheremet, FATE Project, 2012-2013
-    """
-    """    
-    lon1=lon*1.;          lat1=lat*1.;        urc1,v1=VelInterp_lonlat(lon1,lat1,Grid,u,v);  
-    lon2=lon+0.5*tau*urc1;lat2=lat+0.5*tau*v1;urc2,v2=VelInterp_lonlat(lon2,lat2,Grid,u,v);
-    lon3=lon+0.5*tau*urc2;lat3=lat+0.5*tau*v2;urc3,v3=VelInterp_lonlat(lon3,lat3,Grid,u,v);
-    lon4=lon+0.5*tau*urc3;lat4=lat+0.5*tau*v3;urc4,v4=VelInterp_lonlat(lon4,lat4,Grid,u,v);
-    lon=lon+tau/6.*(urc1+2.*urc2+2.*urc3+urc4);
-    lat=lat+tau/6.*(v1+2.*v2+2.*v3+v4);
     """
         
     urc1,v1=VelInterp_lonlat(lon,lat,Grid,ua,va);
@@ -168,7 +173,7 @@ Vitalii Sheremet, FATE Project, 2012-2013
     lon1=lon*1.;          lat1=lat*1.;        urc1,v1=VelInterp_lonlat(lon1,lat1,Grid,u,v);  
     lon2=lon+0.5*tau*urc1;lat2=lat+0.5*tau*v1;urc2,v2=VelInterp_lonlat(lon2,lat2,Grid,u,v);
     lon3=lon+0.5*tau*urc2;lat3=lat+0.5*tau*v2;urc3,v3=VelInterp_lonlat(lon3,lat3,Grid,u,v);
-    lon4=lon+0.5*tau*urc3;lat4=lat+0.5*tau*v3;urc4,v4=VelInterp_lonlat(lon4,lat4,Grid,u,v);
+    lon4=lon+    tau*urc3;lat4=lat+    tau*v3;urc4,v4=VelInterp_lonlat(lon4,lat4,Grid,u,v);
     lon=lon+tau/6.*(urc1+2.*urc2+2.*urc3+urc4);
     lat=lat+tau/6.*(v1+2.*v2+2.*v3+v4);
     """
@@ -184,15 +189,14 @@ Vitalii Sheremet, FATE Project, 2012-2013
     return lon,lat
     
 def step(args):
-    lo=args['lo'];la=args['la'];Grid=args['Grid'];u=args['u'];v=args['v'];tau=args['tau']
-    lo1,la1=RungeKutta4_lonlat(lo,la,Grid,u,v,tau)
+    lo=args['lo'];la=args['la'];Grid=args['Grid'];ua=args['ua'];va=args['va'];uc=args['uc'];vc=args['vc'];ub=args['ub'];vb=args['vb'];tau=args['tau']
+    lo1,la1=RungeKutta4_lonlattime(lo,la,Grid,ua,va,uc,vc,ub,vb,tau)
     return [lo1,la1]
     
-def gen_args(los,las,Grid,u,v,tau):
+def gen_args(los,las,Grid,ua,va,uc,vc,ub,vb,tau):
     for k in range(len(los)):
         lo=los[k];la=las[k]
-        yield {'lo':lo,'la':la,'Grid':Grid,'u':u,'v':v,'tau':tau}
-
+        yield {'lo':lo,'la':la,'Grid':Grid,'ua':ua,'va':va,'uc':uc,'vc':vc,'ub':ub,'vb':vb,'tau':tau}
     
 def nearxy(x,y,xp,yp):
     """
@@ -257,6 +261,44 @@ Vitalii Sheremet, FATE Project
 # coordinates of the vertices
     kvf=Grid['kvf']
     x=Grid['x'][kvf];y=Grid['y'][kvf]  
+# calculate baricentric trilinear coordinates
+    A012=((x[1,:]-x[0,:])*(y[2,:]-y[0,:])-(x[2,:]-x[0,:])*(y[1,:]-y[0,:])) 
+# A012 is twice the area of the whole triangle,
+# or the determinant of the linear system above.
+# When xc,yc is the baricenter, the three terms in the sum are equal.
+# Note the cyclic permutation of the indices
+    lamb0=((x[1,:]-xp)*(y[2,:]-yp)-(x[2,:]-xp)*(y[1,:]-yp))/A012
+    lamb1=((x[2,:]-xp)*(y[0,:]-yp)-(x[0,:]-xp)*(y[2,:]-yp))/A012
+    lamb2=((x[0,:]-xp)*(y[1,:]-yp)-(x[1,:]-xp)*(y[0,:]-yp))/A012
+    kf,=np.argwhere((lamb0>=0.)*(lamb1>=0.)*(lamb2>=0.))
+#    kf=np.argwhere((lamb0>=0.)*(lamb1>=0.)*(lamb2>=0.)).flatten()
+#    kf,=np.where((lamb0>=0.)*(lamb1>=0.)*(lamb2>=0.))
+    return kf,lamb0[kf],lamb1[kf],lamb2[kf]
+
+def find_kf_lonlat(Grid,lonp,latp):
+    """
+kf,lamb0,lamb1,lamb2=find_kf(Grid,lonp,latp)
+
+find to which triangle a point (lonp,latp) belongs
+input:
+Grid - triangular grid info
+lonp,latp - point on a plane
+output:
+kf - index of the the triangle
+lamb0,lamb1,lamb2 - barycentric coordinates of P in the triangle
+
+This method is approximate, valid only for small spherical triangles.
+The metric coefficient is evaluated at P.
+
+derived from find_kf
+
+Vitalii Sheremet, FATE Project
+    """
+    cp=np.cos(latp*np.pi/180.)
+    xp=lonp*cp;yp=latp
+# coordinates of the vertices
+    kvf=Grid['kvf']
+    x=Grid['lon'][kvf]*cp;y=Grid['lat'][kvf]  
 # calculate baricentric trilinear coordinates
     A012=((x[1,:]-x[0,:])*(y[2,:]-y[0,:])-(x[2,:]-x[0,:])*(y[1,:]-y[0,:])) 
 # A012 is twice the area of the whole triangle,
@@ -512,6 +554,7 @@ Velocity interpolating function
     vi=(v[kfv]*w).sum()
         
     return urci,vi
+
     
 def ingom3(lonp,latp,Grid):
     """
@@ -574,9 +617,7 @@ check if point is inside a convex polygon
 
     i - boolean, True if xp,yp inside the polygon, False otherwise
     
-    """
-    
-    
+    """    
     N=len(xv)   
     j=np.arange(N)
     ja=(j+1)%N # next vertex in the sequence 
@@ -610,8 +651,41 @@ Vitalii Sheremet, SeaHorse Project, 2008-2013.
 #
 #    yr+=(mo-1)//12;mo=(mo-1)%12+1; # this extends mo values beyond the formal range 1-12
     RD=367*yr-(7*(yr+((mo+9)//12))//4)-(3*(((yr+(mo-9)//7)//100)+1)//4)+(275*mo//9)+da-396+(hr*3600+mi*60+se)/86400.;
-    return RD    
+    return RD
+
+def get_uv(tRD):
+    """
+    get velocity fields either from a local file or from internet
+
+u,v=get_uv(tRD)
+
+    tRD - time RataDie, python ordinal
+    u,v - velocity fields
+    """
+
+# location of velocity fields on a local disk
+    FN0='/home/vsheremet/FATE/GOM3_DATA/'
+    tn=np.round(tRD*24.)/24.
+    ti=datetime.fromordinal(int(tn))
+    YEAR=str(ti.year)
+    MO=str(ti.month).zfill(2)
+    DA=str(ti.day).zfill(2)
+    hr=(tn-int(tn))*24
+    HR=str(int(np.round(hr))).zfill(2)            
+    TS=YEAR+MO+DA+HR+'0000'
+    print TS
+    
+    FNU=FN0+'GOM3_'+YEAR+'/'+'u'+D+'/'+TS+'_u'+D+'.npy'
+    FNV=FN0+'GOM3_'+YEAR+'/'+'v'+D+'/'+TS+'_v'+D+'.npy'
+    u=np.load(FNU).flatten()
+    v=np.load(FNV).flatten()
+    return u,v
+
+    
 ############################################################################
+NCPU=1
+NCPU=16 # number of CPUs to use
+
 # Drifter Tracking Script
 ############################################################################
     
@@ -692,7 +766,6 @@ latc=np.load('gom3.latc.npy')
 coslat=np.cos(lat*np.pi/180.)
 coslatc=np.cos(latc*np.pi/180.)
 
-
 #nv: Array of 32 bit Integers [three = 0..2][nele = 0..90414] 
 #long_name: nodes surrounding element
 #standard_name: face_node_connectivity
@@ -735,14 +808,8 @@ ntve=np.load('gom3.ntve.npy')
 
 Grid={'x':x,'y':y,'xc':xc,'yc':yc,'lon':lon,'lat':lat,'lonc':lonc,'latc':latc,'coslat':coslat,'coslatc':coslatc,'kvf':nv,'kff':nbe,'kvv':nbsn,'nvv':ntsn,'kfv':nbve,'nfv':ntve}
 
-#u=np.load('20010101000000_ua.npy').flatten()
-#v=np.load('20010101000000_va.npy').flatten()
-#u=np.load('19970401000000_ua.npy').flatten()
-#v=np.load('19970401000000_va.npy').flatten()
-
-FN0='/home/vsheremet/FATE/GOM3_DATA/'
-
 """
+# test values of initial conditions
 lond0=np.arange(-69.,-66.,0.25)
 latd0=np.arange(41.,43.,0.25)
 
@@ -757,67 +824,81 @@ llond0=llond0.flatten()
 llatd0=llatd0.flatten()
 ND=llond0.size
 """
-
-# rectangular grid that completely covers gom3
-# and is aligned with 32x32 front detection subwindows
-gom3r_lon=np.load('gom3r.lon.npy')
-gom3r_lat=np.load('gom3r.lat.npy')
-MS=2
-#subsample every 2nd node
-#gom3r_llon,gom3r_llat=np.meshgrid(gom3r_lon[::2],gom3r_lat[::2])
-gom3r_llon,gom3r_llat=np.meshgrid(gom3r_lon[::MS],gom3r_lat[::MS])
-RSHAPE=gom3r_llon.shape
-# deploy drifters at nodes of GOM3R grid
-llond0=gom3r_llon.flatten()
-llatd0=gom3r_llat.flatten()
-ND=llond0.size
-print 'ND =',ND
-
-LArea='GB150m'
-if LArea=='GOM3':
-#select only points inside GOM3 mesh
-    i=np.zeros(ND,dtype=bool)
-    for k in range(ND):
-        i[k]=ingom3(llond0[k],llatd0[k],Grid)
-    llondx=llond0[np.argwhere(i==False).flatten()]
-    llatdx=llatd0[np.argwhere(i==False).flatten()]
-    llond0=llond0[np.argwhere(i==True).flatten()]
-    llatd0=llatd0[np.argwhere(i==True).flatten()]
+############################################################################
+# delete files if you want new initial conditions
+try:
+    llond0=np.load('llond0.npy')
+    llatd0=np.load('llatd0.npy')
+    print 'loading init positions from file'
     ND=llond0.size
     print 'ND =',ND
 
-elif LArea=='GB150m':
-# select only points inside GB150m Area
-    GB150m=np.load('GB150m.npy')
-    i=inconvexpolygon(llond0,llatd0,GB150m[:,0],GB150m[:,1])
-    llond0=llond0[np.argwhere(i).flatten()]
-    llatd0=llatd0[np.argwhere(i).flatten()]
+except:
+# calculate intial conditions for some cases    
+    print 'calculating init positions'
+    
+    # GOM3R - rectangular grid that completely covers GOM3 the triangular grid
+    # and is aligned with 32x32 front detection subwindows
+    gom3r_lon=np.load('gom3r.lon.npy')
+    gom3r_lat=np.load('gom3r.lat.npy')
+    MS=2
+    #subsample every 2nd node
+    #gom3r_llon,gom3r_llat=np.meshgrid(gom3r_lon[::2],gom3r_lat[::2])
+    gom3r_llon,gom3r_llat=np.meshgrid(gom3r_lon[::MS],gom3r_lat[::MS])
+    RSHAPE=gom3r_llon.shape
+    # deploy drifters at nodes of GOM3R grid
+    llond0=gom3r_llon.flatten()
+    llatd0=gom3r_llat.flatten()
     ND=llond0.size
     print 'ND =',ND
+    
+    LArea='GB150m'
+#    LArea='GOM3'
+    if LArea=='GOM3':
+    #select only points inside GOM3 mesh
+        i=np.zeros(ND,dtype=bool)
+        for k in range(ND):
+            i[k]=ingom3(llond0[k],llatd0[k],Grid)
+        llondx=llond0[np.argwhere(i==False).flatten()]
+        llatdx=llatd0[np.argwhere(i==False).flatten()]
+        llond0=llond0[np.argwhere(i==True).flatten()]
+        llatd0=llatd0[np.argwhere(i==True).flatten()]
+        ND=llond0.size
+        print 'ND =',ND
+    
+    elif LArea=='GB150m':
+    # select only points inside GB150m Area
+        GB150m=np.load('GB150m.npy')
+        i=inconvexpolygon(llond0,llatd0,GB150m[:,0],GB150m[:,1])
+        llond0=llond0[np.argwhere(i).flatten()]
+        llatd0=llatd0[np.argwhere(i).flatten()]
+        ND=llond0.size
+        print 'ND =',ND
+    
+    np.save('llond0.npy',llond0)
+    np.save('llatd0.npy',llatd0)
+#############################################################################
 
-
-#> 1977, 1978
-#> 1980, 1981
-#> 2002, 2003
-#> 2009, 2010
-
+#> (1977,1978)
+#> (1980,1981),(1986,1987),(2002,2003),(2004,2005),(2008,2009),2010
 
 YEAR=sys.argv[1]
 year=int(YEAR)
 t0=RataDie(year,2,12)
 FTS=YEAR+'0212'
-#t1=RataDie(1980,4,2)
 
 # velocity depth code: 0 - surface; a - depth averaged
 D=sys.argv[2]
 
+# specify the length of calculation, typically 62 days
 t1=t0+62
+t1=t0+2./24.
 dtday=1./24.
 tt=np.arange(t0,t1+dtday,dtday)
 NT=len(tt)
-#NT=175
 lont=np.zeros((NT,ND))
 latt=np.zeros((NT,ND))
+#tempt=np.zeros((NT,ND))
 dt=60*60.
 tau=dt/111111. # deg per (velocityunits*dt)
 # dt in seconds
@@ -827,9 +908,6 @@ tau=dt/111111. # deg per (velocityunits*dt)
 # initial positions
 lont[0,:]=llond0
 latt[0,:]=llatd0
-
-NCPU=1
-#NCPU=4
  
 tic1=datetime.now()
 tic=os.times()
@@ -838,61 +916,40 @@ tic=os.times()
 #time dependent u,v
 kt=0
 tRD=tt[kt]
-tn=np.round(tRD*24.)/24.
-ti=datetime.fromordinal(int(tn))
-YEAR=str(ti.year)
-MO=str(ti.month).zfill(2)
-DA=str(ti.day).zfill(2)
-hr=(tn-int(tn))*24
-HR=str(int(np.round(hr))).zfill(2)            
-TS=YEAR+MO+DA+HR+'0000'
-print TS
+u1,v1=get_uv(tRD)
 
-FNU=FN0+'GOM3_'+YEAR+'/'+'u'+D+'/'+TS+'_u'+D+'.npy'
-FNV=FN0+'GOM3_'+YEAR+'/'+'v'+D+'/'+TS+'_v'+D+'.npy'
-u1=np.load(FNU).flatten()
-v1=np.load(FNV).flatten()
+#FNT=FN0+'GOM3_'+YEAR+'/'+'temp'+D+'/'+TS+'_temp'+D+'.npy'
+#temp1=np.load(FNT).flatten()
 
 for kt in range(NT-1):
-#    print kt
-    
 # time dependent u,v at current time level (from previous step)    
-    u0=u1*1.0
-    v0=v1*1.0    
-    
+    u0=u1*1.0;v0=v1*1.0
+#    temp0=temp1*1.0    
 #time dependent u,v at next time level
     tRD=tt[kt+1]
-    tn=np.round(tRD*24.)/24.
-    ti=datetime.fromordinal(int(tn))
-    YEAR=str(ti.year)
-    MO=str(ti.month).zfill(2)
-    DA=str(ti.day).zfill(2)
-    hr=(tn-int(tn))*24
-    HR=str(int(np.round(hr))).zfill(2)            
-    TS=YEAR+MO+DA+HR+'0000'
-    print TS
-    
-    FNU=FN0+'GOM3_'+YEAR+'/'+'u'+D+'/'+TS+'_u'+D+'.npy'
-    FNV=FN0+'GOM3_'+YEAR+'/'+'v'+D+'/'+TS+'_v'+D+'.npy'
-    u1=np.load(FNU).flatten()
-    v1=np.load(FNV).flatten()
-
+    u1,v1=get_uv(tRD)
+#    FNT=FN0+'GOM3_'+YEAR+'/'+'temp'+D+'/'+TS+'_temp'+D+'.npy'
+#    temp1=np.load(FNT).flatten()
 # velocity at the middle of time step, linear interpolation
-    ui=(u0+u1)*0.5
-    vi=(v0+v1)*0.5
+    ui=(u0+u1)*0.5;vi=(v0+v1)*0.5
 
-#    if NCPU==1:    
-    for kd in range(ND):
+    if NCPU==1:    
+        for kd in range(ND):
 # for each drifter make one time step using classic 4th order Runge-Kutta method        
-        lont[kt+1,kd],latt[kt+1,kd]=RungeKutta4_lonlattime(lont[kt,kd],latt[kt,kd],Grid,u0,v0,ui,vi,u1,v1,tau)
-#    else:
-#        los=lont[kt,:];las=latt[kt,:]
-#        p = mp.Pool(processes=NCPU)
-#        lolas1=p.map(step,gen_args(los,las,Grid,u,v,tau))
-#        p.close()
-#        p.join()
-#        lolas1=np.array(lolas1)
-#        lont[kt+1,:]=lolas1[:,0];latt[kt+1,:]=lolas1[:,1]
+            lont[kt+1,kd],latt[kt+1,kd]=RungeKutta4_lonlattime(lont[kt,kd],latt[kt,kd],Grid,u0,v0,ui,vi,u1,v1,tau)
+# save temp data
+#            kf,lamb0,lamb1,lamb2=find_kf_lonlat(Grid,lont[kt,kd],latt[kt,kd])
+#            kvf=Grid['kvf'][:,kf]# coordinates of the vertices
+#            tempt[kt,kd]=temp1[kvf][0]*lamb0+temp1[kvf][1]*lamb1+temp1[kvf][2]*lamb2
+    
+    else:
+        los=lont[kt,:];las=latt[kt,:]
+        p = mp.Pool(processes=NCPU)
+        lolas1=p.map(step,gen_args(los,las,Grid,u0,v0,ui,vi,u1,v1,tau))
+        p.close()
+        p.join()
+        lolas1=np.array(lolas1)
+        lont[kt+1,:]=lolas1[:,0];latt[kt+1,:]=lolas1[:,1]
      
 toc=os.times()
 print 'timing [s] per step: ', (toc[0]-tic[0])/NT,(toc[1]-tic[1])/NT
@@ -900,9 +957,9 @@ toc1=datetime.now()
 print tic1,toc1
 print toc1-tic1
 
-#np.save('drifttrack.lont.npy',lont)
-#np.save('drifttrack.latt.npy',latt)
 np.save('dtr_'+FTS+'_'+D+'_lont.npy',lont)
 np.save('dtr_'+FTS+'_'+D+'_latt.npy',latt)
+#np.save('dtr_'+FTS+'_'+D+'_tempt.npy',tempt)
+
 
 
