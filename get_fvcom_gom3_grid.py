@@ -28,8 +28,11 @@ def get_fvcom_gom3_grid(a='disk'):
     """
 #    a='disk'
     import numpy as np
-    
     if a=='disk':
+        #np.save('FVCOM_GOM3_Grid.npy',Grid)
+        Grid=np.load('FVCOM_GOM3_Grid.npy').item()
+
+    elif a=='disk1':
     # quick load from disk
         x=np.load('gom3.x.npy')
         y=np.load('gom3.y.npy')
@@ -54,6 +57,8 @@ def get_fvcom_gom3_grid(a='disk'):
         nfv=np.load('gom3.nfv.npy')
     
         Grid={'x':x,'y':y,'xc':xc,'yc':yc,'lon':lon,'lat':lat,'lonc':lonc,'latc':latc,'coslat':coslat,'coslatc':coslatc,'h':h,'kvf':kvf,'kff':kff,'kvv':kvv,'nvv':nvv,'kfv':kfv,'nfv':nfv}
+        np.save('FVCOM_GOM3_Grid.npy',Grid)
+        #Grid=np.load('FVCOM_GOM3_Grid.npy').item()
 
     elif a=='disk2':
     # load native fvcom variables from disk and calculate variables with new names
@@ -152,7 +157,9 @@ def get_fvcom_gom3_grid(a='disk'):
         nfv=np.load('gom3.nfv.npy')
     
         Grid={'x':x,'y':y,'xc':xc,'yc':yc,'lon':lon,'lat':lat,'lonc':lonc,'latc':latc,'coslat':coslat,'coslatc':coslatc,'h':h,'kvf':kvf,'kff':kff,'kvv':kvv,'nvv':nvv,'kfv':kfv,'nfv':nfv}
-    
+        np.save('FVCOM_GOM3_Grid.npy',Grid)
+        #Grid=np.load('FVCOM_GOM3_Grid.npy').item()
+   
     elif a=='web':
         
         #from pydap.client import open_url # pydap version
@@ -302,11 +309,13 @@ def get_fvcom_gom3_grid(a='disk'):
         np.save('gom3.nfv.npy',nfv)
 
         Grid={'x':x,'y':y,'xc':xc,'yc':yc,'lon':lon,'lat':lat,'lonc':lonc,'latc':latc,'coslat':coslat,'coslatc':coslatc,'h':h,'kvf':kvf,'kff':kff,'kvv':kvv,'nvv':nvv,'kfv':kfv,'nfv':nfv}
-    
+        np.save('FVCOM_GOM3_Grid.npy',Grid)
+        #Grid=np.load('FVCOM_GOM3_Grid.npy').item()
+
     else:
         print 'get_fvcom_gom3_grid: unknown argument'
     
     return Grid
 
 if __name__ == "__main__":
-    G=get_fvcom_gom3_grid()
+    Grid=get_fvcom_gom3_grid()
